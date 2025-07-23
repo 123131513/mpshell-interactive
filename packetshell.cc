@@ -49,7 +49,8 @@ void PacketShell::start_uplink( const std::string & shell_prefix,
                                 const std::vector<std::string> & uplinks,
                                 const std::vector<json> & queue_params,
                                 const std::string & log_file,
-                                const std::vector< string > & command)
+                                const std::vector< string > & command,
+                                int pipefd[2]) // 添加管道参数
 {
     /* Fork */
     child_processes_.emplace_back( [&]() {
@@ -90,8 +91,51 @@ void PacketShell::start_uplink( const std::string & shell_prefix,
             /* Fork again after dropping root privileges */
             drop_privileges();
 
+            // 在创建子进程前发送准备就绪信号
+            close(pipefd[0]); // 关闭子进程不需要的读端
+            write(pipefd[1], "R", 1); // 发送就绪信号
+            close(pipefd[1]);
+
             std::vector<ChildProcess> uplink_processes;
-            ChildProcess bash_process( [&]() {
+
+            // 如果没有指定命令，启动交互式shell
+            if (command.empty()) {
+                ChildProcess bash_process([&]() {
+                    // 设置新的控制终端
+                
+                    // 设置终端属性
+                    struct termios t;
+                    if (tcgetattr(STDIN_FILENO, &t) == 0) {
+                        t.c_lflag |= ECHO | ICANON;
+                        tcsetattr(STDIN_FILENO, TCSANOW, &t);
+                    } else {
+                        perror("tcgetattr");
+                    }
+                
+                    environ = user_environment;
+                    prepend_shell_prefix(shell_prefix);
+                
+                    const string shell = shell_path();
+                    cout << "[mpshell] Starting interactive shell..." << endl;
+                
+                    // 方法1: 使用execvp启动交互式Shell
+                    const char *args[] = {
+                        shell.c_str(),  // argv[0]
+                        "-i",           // 交互模式
+                        nullptr
+                    };
+                
+                    execvp(args[0], const_cast<char* const*>(args));
+                    perror("execvp");
+                    return EXIT_FAILURE;
+                
+                    // 方法2: 使用system函数（更简单）
+                    // string shell_cmd = shell + " -i";
+                    // return system(shell_cmd.c_str());
+                });
+                uplink_processes.emplace_back(move(bash_process));
+            } else {
+                ChildProcess bash_process( [&]() {
                     /* restore environment and tweak bash prompt */
                     environ = user_environment;
                     prepend_shell_prefix( shell_prefix );
@@ -101,7 +145,8 @@ void PacketShell::start_uplink( const std::string & shell_prefix,
                     //SystemCall( "execl", execl( shell.c_str(), shell.c_str(), "-c", program_name.c_str(), static_cast<const char*>( nullptr ) ) );
                     return EXIT_FAILURE;
                 } );
-            uplink_processes.emplace_back(move(bash_process));
+                uplink_processes.emplace_back(move(bash_process));
+            }
 
             for (size_t i = 0; i < if_num; ++i) {
                 ChildProcess link_ferry( [&]() {
