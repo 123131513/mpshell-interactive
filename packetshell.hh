@@ -4,6 +4,7 @@
 #define PACKETSHELL_HH
 
 #include <memory>
+#include <termios.h>
 
 #include "netdevice.hh"
 #include "nat.hh"
@@ -37,7 +38,8 @@ public:
                        const std::vector<std::string> & uplinks,
                        const std::vector<json> & queue_params,
                        const std::string & log_file,
-                       const std::vector< std::string > & command );
+                       const std::vector< std::string > & command,
+                       int pipefd[2] );
 
     void start_downlink( const std::vector<uint64_t> & delays,
                          const std::vector<std::string> & downlinks,
